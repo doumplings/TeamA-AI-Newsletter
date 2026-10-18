@@ -1,0 +1,6 @@
+$kind: collection
+description: Run requests in order against the collector API. No credentials belong in this collection. Empty publication windows are valid. See docs/POSTMAN.md.
+variables:
+  base_url: http://127.0.0.1:8001
+  source_id: ""
+  bluesky_source_id: ""
