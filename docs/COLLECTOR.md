@@ -21,7 +21,7 @@ psql 'postgresql://user:password@localhost/ainews' -f schema.sql
 # Only for sources configured with render_js=true:
 python -m playwright install chromium
 python -m collector --once           # one cycle; JSON summary on stdout
-python -m collector                  # worker: immediate cycle, then every 900 seconds
+python -m collector                  # worker: immediate cycle, then every 30 seconds
 ```
 
 For the complete local setup, run `docker compose -f compose.collector.yml up -d --build --wait`.
@@ -30,8 +30,8 @@ and is mounted read-only for database settings. The worker restarts
 with Docker and does not run inside FastAPI processes. Use `--interval` only to
 change polling cadence; the first publication window remains 900 seconds.
 
-The default cadence is start-to-start (00:00, 00:15, 00:30), rather than waiting
-900 seconds after completion. Slow cycles run serially and skip missed ticks.
+The default cadence is start-to-start (00:00, 00:30, 01:00), rather than waiting
+30 seconds after completion. Slow cycles run serially and skip missed ticks.
 A PostgreSQL advisory lock prevents overlap with manual API requests and other
 workers. SIGINT/SIGTERM request a stop after the current cycle.
 
@@ -209,3 +209,4 @@ Startup upgrades the built-in Bluesky query configuration in existing databases
 without moving its successful checkpoint or changing its enabled state.
 
 `docker compose -f compose.collector.yml up -d --build collector-worker`
+`docker compose -f compose.collector.yml logs -f --tail=50 --timestamps collector-worker`

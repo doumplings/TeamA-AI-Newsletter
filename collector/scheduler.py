@@ -3,7 +3,7 @@ import logging
 import time
 
 
-def run_schedule(cycle, stop, interval=900, clock=time.monotonic):
+def run_schedule(cycle, stop, interval=30, clock=time.monotonic):
     next_run = clock()
     while not stop.is_set():
         try:

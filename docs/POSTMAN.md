@@ -12,7 +12,7 @@ Open Docker Desktop and wait for it to start. From `TeamA-AI-Newsletter`:
 docker compose -f compose.collector.yml up -d --build --wait
 ```
 
-This starts a dedicated worker that automatically collects every 900 seconds,
+This starts a dedicated worker that automatically collects every 30 seconds,
 and creates a dedicated PostgreSQL database on localhost port 55432 and initializes
 `schema.sql` on its first startup. Data persists in the `collector_data` volume.
 The credentials below are for this local development database only.
@@ -47,7 +47,7 @@ All sources use policy checks and a minimum five-second interval. Publisher acce
 and feed validity must be checked with a live run; a blocked source fails independently.
 
 This is an unauthenticated local testing API: keep it bound to `127.0.0.1`.
-The Compose worker collects automatically every 900 seconds. Manual POST requests
+The Compose worker collects automatically every 30 seconds. Manual POST requests
 can trigger an extra cycle; the database lock prevents overlapping collection.
 POST runs all active sources in this database. The summary includes a `sources`
 array with success/failure and item counts for each source. First collection includes only the previous 900 seconds. Later cycles use each
@@ -148,7 +148,7 @@ A source failure does not prevent other sources from collecting.
 ## Automatic 15-minute collection
 
 Keep Docker running. The dedicated `collector-worker` runs immediately on startup,
-then on a fixed 900-second cadence, independently of Postman or the testing API.
+then on a fixed 30-second cadence, independently of Postman or the testing API.
 Check recent cycle summaries with:
 
 ```sh
@@ -188,7 +188,7 @@ The collector then creates a session through `bsky.social` and sends authenticat
 search through its AppView proxy. This option supports Bluesky-hosted accounts;
 custom PDS hosting needs separate server configuration. Credentials and session
 JWTs stay out of source records, responses, and logs. The session is reused across
-pages within a cycle. The worker remains on the same 900-second schedule.
+pages within a cycle. The worker remains on the same 30-second schedule.
 
 ```sh
 docker compose -f compose.collector.yml up -d --build --force-recreate collector-worker
