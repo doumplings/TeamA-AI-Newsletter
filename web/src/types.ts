@@ -54,6 +54,17 @@ export interface DeliveryView {
   sentAt: string | null;
 }
 
+/** An item the collector stored; importanceLevel stays null until it is scored. */
+export interface NewsView {
+  itemId: number;
+  title: string;
+  link: string;
+  sourceName: string;
+  summary: string | null;
+  importanceLevel: ImportanceLevel | null;
+  publishedAt: string;
+}
+
 export interface HistoryPageView {
   items: DeliveryView[];
   page: number;

@@ -8,34 +8,26 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import inspect
+
+from collector.sources import seed_source
 
 from . import config, telegram_bot
-from .db import Base, SessionLocal, engine
-from .models import Source, SourceType
+from .db import SessionLocal, engine
 from .routers import auth, channels, subscriber
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't print URLs (they contain the bot token)
 
-SEED_SOURCES = [
-    ("OpenAI Blog", SourceType.rss, "https://openai.com/blog/rss.xml", 30),
-    ("Anthropic News", SourceType.html, "https://www.anthropic.com/news", 30),
-    ("Google DeepMind Blog", SourceType.rss, "https://deepmind.google/blog/rss.xml", 30),
-    ("Meta AI Blog", SourceType.html, "https://ai.meta.com/blog/", 30),
-    ("Hugging Face Blog", SourceType.rss, "https://huggingface.co/blog/feed.xml", 30),
-    ("TechCrunch AI", SourceType.rss, "https://techcrunch.com/category/artificial-intelligence/feed/", 20),
-    ("The Verge AI", SourceType.rss, "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", 20),
-    ("Hacker News (AI)", SourceType.api, "https://hn.algolia.com/api/v1/search?query=AI", 10),
-]
-
 
 def init_db() -> None:
-    Base.metadata.create_all(engine)
-    with SessionLocal() as db:
-        if not db.scalar(select(Source.id).limit(1)):
-            db.add_all(Source(name=n, source_type=t, url=u, base_weight=w) for n, t, u, w in SEED_SOURCES)
-            db.commit()
+    """Check the shared schema is there and add the collector's default sources."""
+    if engine.dialect.name != "postgresql":
+        raise RuntimeError("DATABASE_URL must point to PostgreSQL (the schema.sql database the collector uses).")
+    if not inspect(engine).has_table("channel_connections"):
+        raise RuntimeError("The database has no tables yet. Run once:  psql -d ainews -f schema.sql  (from the repo root)")
+    # Same list the collector seeds, so both processes agree on source ids.
+    seed_source(SessionLocal)
 
 
 @asynccontextmanager

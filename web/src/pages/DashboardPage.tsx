@@ -19,13 +19,14 @@ export default function DashboardPage() {
   const location = useLocation();
   const justConnected = (location.state as { justConnected?: ChannelType } | null)?.justConnected;
   const { data, error, loading, setData } = useLoad(async () => {
-    const [channels, profile, sources, history] = await Promise.all([
+    const [channels, profile, sources, history, news] = await Promise.all([
       api.getChannels(),
       api.getProfile(),
       api.getSources(),
       api.getHistory(1),
+      api.getNews(8),
     ]);
-    return { channels, profile, sources, history };
+    return { channels, profile, sources, history, news };
   });
   const [sending, setSending] = useState(false);
 
@@ -96,14 +97,45 @@ export default function DashboardPage() {
         </div>
         <div className="card p-5">
           <p className="text-sm text-slate-500">Last notification</p>
-          <p className="mt-2 text-2xl font-bold">{timeAgo(recent[0]?.sentAt ?? null)}</p>
+          <p className="mt-2 text-2xl font-bold">{timeAgo(data.history.items.find((d) => d.sentAt)?.sentAt ?? null)}</p>
         </div>
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <DefaultLevelCard profile={data.profile} onSaved={(profile) => setData({ ...data, profile })} />
-        <SourcesCard profile={data.profile} sources={data.sources} onSaved={(profile) => setData({ ...data, profile })} />
+        <SourcesCard
+          profile={data.profile}
+          sources={data.sources}
+          onSaved={async (profile) => {
+            setData({ ...data, profile });
+            const news = await api.getNews(8).catch(() => data.news);
+            setData((d) => (d ? { ...d, news } : d));
+          }}
+        />
       </div>
+
+      {/* Latest collected news (from the collector, before scoring and sending) */}
+      <section className="card">
+        <div className="border-b border-slate-100 px-5 py-4">
+          <h2 className="font-semibold">Latest AI news</h2>
+          <p className="text-sm text-slate-600">Newest stories collected from the sources you follow.</p>
+        </div>
+        {data.news.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-slate-500">No news collected yet. Stories appear here after the collector runs.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {data.news.map((n) => (
+              <li key={n.itemId} className="flex items-center gap-3 px-5 py-3">
+                <div className="min-w-0 flex-1">
+                  <a href={n.link} target="_blank" rel="noreferrer" className="block truncate text-sm font-medium hover:text-indigo-700 hover:underline">{n.title}</a>
+                  <p className="truncate text-xs text-slate-500">{n.sourceName} · {timeAgo(n.publishedAt)}</p>
+                </div>
+                {n.importanceLevel && <LevelBadge level={n.importanceLevel} />}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* Recent notifications */}
       <section className="card">

@@ -8,6 +8,7 @@ import type {
   ChannelView,
   HistoryPageView,
   ImportanceLevel,
+  NewsView,
   ProfileView,
   SendTestResult,
   SourceView,
@@ -93,6 +94,9 @@ export class HttpApiClient implements ApiClient {
   }
   async getSources() {
     return (await this.http.get<SourceView[]>('/sources')).data;
+  }
+  async getNews(limit = 10) {
+    return (await this.http.get<NewsView[]>('/news', { params: { limit } })).data;
   }
 
   // ---- History ----

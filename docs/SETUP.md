@@ -32,23 +32,40 @@ shows you the code because nothing is really sent. Use this mode to work on the 
 
 ## 2. Run it live
 
-Two terminals:
+The API and the collector share **one PostgreSQL database** built from `schema.sql`
+(root `models.py`). The collector writes news into it; the API reads it for the web app.
+
+One-time setup (from the repo root, with PostgreSQL running):
 
 ```bash
-# Terminal 1: API
-cd api
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+createdb ainews
+psql -d ainews -f schema.sql                          # creates all tables (run once per new database)
+python3 -m venv .venv && source .venv/bin/activate    # one environment for the API and the collector
 pip install -r requirements.txt
-cp .env.example .env                                  # then fill it in (see below)
-uvicorn app.main:app --reload --port 8000             # API docs: http://localhost:8000/docs
+cp api/.env.example api/.env                          # set SECRET_KEY, check DATABASE_URL
+```
+
+Then three terminals, each with `source .venv/bin/activate` from the repo root:
+
+```bash
+# Terminal 1: API (http://localhost:8000/docs)
+cd api && uvicorn app.main:app --reload --port 8000
 ```
 
 ```bash
-# Terminal 2: web app
-cd web
-# set VITE_API_MODE=live in web/.env
-npm run dev
+# Terminal 2: collector, scrapes the sources into the same database
+export COLLECTOR_DATABASE_URL=postgresql+psycopg:///ainews
+python -m collector --once        # one cycle now; drop --once to repeat every 15 minutes
 ```
+
+```bash
+# Terminal 3: web app (http://localhost:5173), with VITE_API_MODE=live in web/.env
+cd web && npm run dev
+```
+
+Collected stories show up on the dashboard under **Latest AI news**. They are not scored or
+sent yet: that needs the classifier and the dispatcher (next pipeline stages).
+`python api/seed_demo.py` adds a demo account with a notification history.
 
 With nothing filled in `api/.env`, sign-up, email (codes are printed in Terminal 1),
 the dashboard and history already work. To make each channel really deliver:
@@ -73,7 +90,7 @@ For Gmail: turn on 2-Step Verification, create an **App Password**, then set
 ## 3. Tests
 
 ```bash
-cd api && pytest -q        # 15 API tests: sign-up, codes (3 tries, 10-minute expiry), Telegram link, dashboard
+cd api && pytest -q        # 17 API tests against a throwaway `ainews_test` PostgreSQL database
 cd web && npm run build    # type-checks all the TypeScript
 ```
 
@@ -99,10 +116,11 @@ it's one site, so the HTTP-only session cookie just works and we don't have to f
 - Change 8: A channel is saved when it's verified. "Save changes" is only for levels and on/off.
 
 **Security basics (REQ-18):** passwords use scrypt with a salt. Sessions and verification codes are
-stored only as SHA-256 hashes. The client only ever sees masked contacts.
+stored only as SHA-256 hashes. Channel contacts are encrypted (Fernet, keyed from `SECRET_KEY`)
+with a keyed hash for lookups. The client only ever sees masked contacts.
 
 ## Not done yet / next steps
-- `api/app/models.py` is a trimmed copy of the Section 6.2 schema. Point it at the team's `schema.sql` / migrations when they land.
-- Contacts are stored in plain text. Add `ContactCipher` encryption (REQ-18).
+- Collected news is not scored (classifier, UC-12) or sent automatically (dispatcher, UC-13/14) yet.
+- A removed channel's deliveries leave the subscriber's history: `deliveries` has no `user_id`, and its `channel_id` becomes NULL (C2).
 - "Send me a sample news item" stands in for the real Dispatcher until UC-13/14 are merged. It uses the same adapters (`api/app/adapters.py`).
 - There's no rate limiting on login or code sending yet.

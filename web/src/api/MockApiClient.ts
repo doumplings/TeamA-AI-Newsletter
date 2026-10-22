@@ -8,6 +8,7 @@ import type {
   ChannelView,
   DeliveryView,
   ImportanceLevel,
+  NewsView,
   ProfileView,
 } from '../types';
 import { maskContact, validateContact, validateEmail } from '../lib/validation';
@@ -268,6 +269,24 @@ export class MockApiClient implements ApiClient {
   async getSources() {
     await wait(150);
     return FAKE_SOURCES;
+  }
+
+  async getNews(limit = 10): Promise<NewsView[]> {
+    await wait(200);
+    const followed = new Set(this.db.profiles[this.requireUser()].followedSourceIds);
+    const now = Date.now();
+    return FAKE_NEWS.map((news, i) => ({ news, i }))
+      .filter(({ news }) => followed.has(news.sourceId))
+      .slice(0, limit)
+      .map(({ news, i }) => ({
+        itemId: i + 1,
+        title: news.title,
+        link: slugLink(news.title, news.sourceId),
+        sourceName: FAKE_SOURCES.find((s) => s.sourceId === news.sourceId)!.name,
+        summary: null,
+        importanceLevel: null, // not scored until the classifier is merged
+        publishedAt: new Date(now - (i + 1) * 2.5 * 3600 * 1000).toISOString(),
+      }));
   }
 
   // ---------------- History ----------------

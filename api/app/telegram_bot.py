@@ -16,13 +16,15 @@ import threading
 from functools import lru_cache
 
 import httpx
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Header, HTTPException, Request
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from . import config
 from .db import SessionLocal
-from .models import Channel, ChannelType, User
-from .security import read_telegram_token
+from .models import ChannelConnection, ChannelType, User
+from .security import contact_hash, encrypt_contact, read_telegram_token
 
 log = logging.getLogger("ainews.telegram")
 router = APIRouter(tags=["telegram"])
@@ -58,11 +60,29 @@ def _reply(chat_id: int, text: str) -> None:
 
 def link_chat(user_id: int, chat_id: int) -> bool:
     """Create (or replace) the user's Telegram channel, already verified."""
+    hashed = contact_hash(str(chat_id))
     with SessionLocal() as db:
         if not db.get(User, user_id):
             return False
-        db.execute(delete(Channel).where(Channel.user_id == user_id, Channel.channel_type == ChannelType.telegram))
-        db.add(Channel(user_id=user_id, channel_type=ChannelType.telegram, contact=str(chat_id), is_verified=True))
+        # The chat belongs to whoever pressed Start, so it moves off any other account (C5).
+        db.execute(
+            delete(ChannelConnection).where(
+                ChannelConnection.channel_type == ChannelType.telegram,
+                ChannelConnection.contact_hash == hashed,
+                ChannelConnection.user_id != user_id,
+            )
+        )
+        ch = db.scalar(select(ChannelConnection).where(ChannelConnection.user_id == user_id, ChannelConnection.channel_type == ChannelType.telegram))
+        if ch is None:
+            ch = ChannelConnection(user_id=user_id, channel_type=ChannelType.telegram)
+            db.add(ch)
+        # Updated in place, so reconnecting keeps this channel's delivery history.
+        ch.contact_encrypted = encrypt_contact(str(chat_id))
+        ch.contact_hash = hashed
+        ch.is_verified = True
+        ch.verified_at = datetime.now(timezone.utc)
+        ch.verification_code_hash = ch.code_expires_at = None
+        ch.failed_attempts = 0
         db.commit()
     return True
 

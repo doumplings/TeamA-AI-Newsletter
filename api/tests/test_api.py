@@ -2,9 +2,10 @@
 from datetime import datetime, timedelta, timezone
 
 from app.db import SessionLocal
-from app.models import Channel, ChannelType
-from app.security import make_telegram_token, read_telegram_token
+from app.models import ChannelConnection, ChannelType, NewsItem
+from app.security import decrypt_contact, make_telegram_token, read_telegram_token
 from app import telegram_bot
+from collector.sources import default_sources
 
 HOOK = "https://discord.com/api/webhooks/123456789/abcDEF_-xyz"
 
@@ -62,7 +63,7 @@ def test_expired_code_rejected(signed_in, fakes):
     signed_in.post(f"/channels/{ch['channelId']}/test")
     code = fakes[ChannelType.email].last_code()
     with SessionLocal() as db:
-        row = db.get(Channel, ch["channelId"])
+        row = db.get(ChannelConnection, ch["channelId"])
         row.code_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         db.commit()
     assert signed_in.post(f"/channels/{ch['channelId']}/verify", json={"code": code}).status_code == 410
@@ -121,10 +122,13 @@ def test_telegram_link_endpoint_without_bot(signed_in):
 # ---------- dashboard ----------
 def test_profile_threshold_and_sources(signed_in):
     p = signed_in.get("/profile").json()
-    assert p["defaultThreshold"] == "high" and len(p["followedSourceIds"]) == 8
+    everything = list(range(1, len(default_sources()) + 1))
+    assert p["defaultThreshold"] == "high" and p["followedSourceIds"] == everything
     assert signed_in.put("/profile/threshold", json={"level": "medium"}).json()["defaultThreshold"] == "medium"
     assert signed_in.put("/profile/sources", json={"sourceIds": [1, 3]}).json()["followedSourceIds"] == [1, 3]
     assert signed_in.put("/profile/sources", json={"sourceIds": [999]}).status_code == 422
+    # picking every source goes back to "follow all"
+    assert signed_in.put("/profile/sources", json={"sourceIds": everything}).json()["followedSourceIds"] == everything
 
 
 def test_sample_news_goes_to_history(signed_in, fakes):
@@ -135,3 +139,38 @@ def test_sample_news_goes_to_history(signed_in, fakes):
     assert signed_in.post("/deliveries/sample").json() == {"delivered": 1, "failed": 0}
     h = signed_in.get("/history").json()
     assert h["totalPages"] == 1 and h["items"][0]["status"] == "sent" and h["items"][0]["title"].startswith("[Sample]")
+
+
+def test_contact_is_encrypted_and_unique_per_account(signed_in, client):
+    ch = signed_in.post("/channels", json={"channelType": "discord", "contact": HOOK}).json()
+    with SessionLocal() as db:
+        row = db.get(ChannelConnection, ch["channelId"])
+        assert HOOK.encode() not in bytes(row.contact_encrypted) and decrypt_contact(row.contact_encrypted) == HOOK
+    signed_in.post(f"/channels/{ch['channelId']}/test")
+    # an unverified attempt does not block another account...
+    client.post("/auth/logout")
+    client.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
+    other = client.post("/channels", json={"channelType": "discord", "contact": HOOK})
+    assert other.status_code == 201
+    # ...but a verified channel does
+    from app.adapters import REGISTRY  # the fakes
+    client.post(f"/channels/{other.json()['channelId']}/test")
+    client.post(f"/channels/{other.json()['channelId']}/verify", json={"code": REGISTRY[ChannelType.discord].last_code()})
+    client.post("/auth/logout")
+    client.post("/auth/login", json={"email": "seng@example.com", "password": "password123"})
+    assert client.post("/channels", json={"channelType": "discord", "contact": HOOK}).status_code == 409
+
+
+def test_latest_news_shows_collected_items_from_followed_sources(signed_in):
+    with SessionLocal() as db:
+        db.add_all([
+            NewsItem(source_id=1, title="Collected from source 1", url="https://a.example/1", canonical_url="https://a.example/1"),
+            NewsItem(source_id=2, title="Collected from source 2", url="https://b.example/2", canonical_url="https://b.example/2"),
+        ])
+        db.commit()
+    signed_in.post("/deliveries/sample")  # samples never count as news
+    titles = [n["title"] for n in signed_in.get("/news").json()]
+    assert sorted(titles) == ["Collected from source 1", "Collected from source 2"]
+    signed_in.put("/profile/sources", json={"sourceIds": [2]})
+    news = signed_in.get("/news").json()
+    assert [n["title"] for n in news] == ["Collected from source 2"] and news[0]["importanceLevel"] is None

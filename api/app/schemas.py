@@ -100,6 +100,16 @@ class DeliveryView(CamelModel):
     sent_at: datetime | None
 
 
+class NewsView(CamelModel):
+    item_id: int
+    title: str
+    link: str
+    source_name: str
+    summary: str | None
+    importance_level: ImportanceLevel | None  # None until the classifier has scored it
+    published_at: datetime
+
+
 class HistoryPageView(CamelModel):
     items: list[DeliveryView]
     page: int

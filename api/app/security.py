@@ -1,13 +1,12 @@
-"""Passwords, sessions, verification codes and the signed Telegram token.
-
-Only the Python standard library is used, so there is nothing extra to install.
-"""
+"""Passwords, sessions, verification codes, channel contacts and the signed Telegram token."""
 import base64
 import hashlib
 import hmac
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+
+from cryptography.fernet import Fernet
 
 from . import config
 
@@ -48,6 +47,25 @@ def session_expiry() -> datetime:
 # ---------- Verification codes (ChannelVerifier.generateCode / hashCode) ----------
 def generate_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
+
+
+# ---------- Channel contacts (REQ-18, ContactCipher) ----------
+# channel_connections stores the contact encrypted, plus a keyed hash so the
+# same chat / email / webhook can be found (and not reused by a second account).
+_fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(b"contact-cipher:" + config.SECRET_KEY.encode()).digest()))
+
+
+def encrypt_contact(contact: str) -> bytes:
+    return _fernet.encrypt(contact.encode())
+
+
+def decrypt_contact(token: bytes) -> str:
+    return _fernet.decrypt(bytes(token)).decode()
+
+
+def contact_hash(contact: str) -> str:
+    normalized = contact.strip().lower()
+    return hmac.new(config.SECRET_KEY.encode(), normalized.encode(), hashlib.sha256).hexdigest()
 
 
 # ---------- Telegram start-link token (Section 10.2, Change 1) ----------
