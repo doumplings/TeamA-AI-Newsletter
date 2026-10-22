@@ -1,0 +1,32 @@
+services:
+  collector-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: collector
+      POSTGRES_PASSWORD: collector_local
+      POSTGRES_DB: ainews_collector
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - collector_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collector -d ainews_collector"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  collector-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    environment:
+      COLLECTOR_DATABASE_URL: postgresql+psycopg://collector:collector_local@collector-db:5432/ainews_collector
+    volumes:
+      - ./.env:/app/.env:ro
+    depends_on:
+      collector-db:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 90s
+volumes:
+  collector_data:

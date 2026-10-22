@@ -1,0 +1,228 @@
+{
+  "info": {
+    "name": "AI Newsletter \u2014 Real Collector",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Run requests in order against the collector API. No credentials belong in this collection. Empty publication windows are valid. See docs/POSTMAN.md."
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8001"
+    },
+    {
+      "key": "source_id",
+      "value": ""
+    },
+    {
+      "key": "bluesky_source_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Check database connection",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/health"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Database connected\", () => pm.expect(pm.response.json().ok).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. List sources",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/sources"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const sources = pm.response.json();",
+              "const source = sources.find(s => s.url === \"https://huggingface.co/blog/feed.xml\");",
+              "pm.test(\"RSS source configured\", () => pm.expect(source).to.exist);",
+              "if (source) pm.collectionVariables.set(\"source_id\", String(source.source_id));",
+              "const social = sources.find(s => s.url === \"https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts\");",
+              "pm.test(\"Bluesky configured\", () => pm.expect(social).to.exist);",
+              "if (social) pm.collectionVariables.set(\"bluesky_source_id\", String(social.source_id));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Collect real news",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/collector/run"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Collection has no failures\", () => { const r = pm.response.json(); pm.expect(r).not.to.have.property(\"skipped\"); pm.expect(r.failures).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. List collected news",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/items?limit=20&offset=0"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Valid total\", () => pm.expect(pm.response.json().total).to.be.at.least(0));",
+              "pm.test(\"Article fields present\", () => { for (const item of pm.response.json().items) { pm.expect(item.title).to.be.a(\"string\").and.not.empty; pm.expect(item.url).to.match(/^https?:\\/\\//); pm.expect(item.source_name).to.be.a(\"string\"); } });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Filter by RSS source",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/items?source_id={{source_id}}&limit=20"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Valid total\", () => pm.expect(pm.response.json().total).to.be.at.least(0));",
+              "pm.test(\"Article fields present\", () => { for (const item of pm.response.json().items) { pm.expect(item.title).to.be.a(\"string\").and.not.empty; pm.expect(item.url).to.match(/^https?:\\/\\//); pm.expect(item.source_name).to.be.a(\"string\"); } });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Run again (check duplicate handling)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/collector/run"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Collection has no failures\", () => { const r = pm.response.json(); pm.expect(r).not.to.have.property(\"skipped\"); pm.expect(r.failures).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Collect selected source only",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/collector/run?source_id={{source_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Collection has no failures\", () => { const r = pm.response.json(); pm.expect(r).not.to.have.property(\"skipped\"); pm.expect(r.failures).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Collect Bluesky AI posts",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/collector/run?source_id={{bluesky_source_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Collection has no failures\", () => { const r = pm.response.json(); pm.expect(r).not.to.have.property(\"skipped\"); pm.expect(r.failures).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. List Bluesky AI posts",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/items?source_id={{bluesky_source_id}}&limit=100"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Valid total\", () => pm.expect(pm.response.json().total).to.be.at.least(0));",
+              "pm.test(\"Article fields present\", () => { for (const item of pm.response.json().items) { pm.expect(item.title).to.be.a(\"string\").and.not.empty; pm.expect(item.url).to.match(/^https?:\\/\\//); pm.expect(item.source_name).to.be.a(\"string\"); } });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Preview Bluesky \u2014 last 24 hours",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/preview?source_id={{bluesky_source_id}}&lookback_hours=24&limit=20"
+      }
+    },
+    {
+      "name": "Preview RSS \u2014 last 24 hours",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/collector/preview?source_id={{source_id}}&lookback_hours=24&limit=20"
+      }
+    }
+  ]
+}

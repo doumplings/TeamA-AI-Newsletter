@@ -1,0 +1,8 @@
+$kind: http-request
+url: "{{base_url}}/collector/preview?source_id={{bluesky_source_id}}&lookback_hours=24&limit=20"
+method: GET
+queryParams:
+  source_id: "{{bluesky_source_id}}"
+  lookback_hours: "24"
+  limit: "20"
+order: 10000
