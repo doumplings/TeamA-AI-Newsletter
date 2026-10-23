@@ -55,7 +55,7 @@ cd api && uvicorn app.main:app --reload --port 8000
 ```bash
 # Terminal 2: collector, scrapes the sources into the same database
 export COLLECTOR_DATABASE_URL=postgresql+psycopg:///ainews
-python -m collector --once        # one cycle now; drop --once to repeat every 15 minutes
+python -m collector --once        # one cycle now; drop --once to repeat every 30 seconds
 ```
 
 ```bash
