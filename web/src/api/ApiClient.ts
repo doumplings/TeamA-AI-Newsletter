@@ -5,6 +5,7 @@ import type {
   ChannelView,
   HistoryPageView,
   ImportanceLevel,
+  NewsView,
   ProfileView,
   SendTestResult,
   SourceView,
@@ -45,6 +46,9 @@ export interface ApiClient {
   setThreshold(level: ImportanceLevel): Promise<ProfileView>;
   setFollowedSources(sourceIds: number[]): Promise<ProfileView>;
   getSources(): Promise<SourceView[]>;
+
+  /** Newest collected news from the sources the subscriber follows. */
+  getNews(limit?: number): Promise<NewsView[]>;
 
   // History (UC-8)
   getHistory(page: number): Promise<HistoryPageView>;

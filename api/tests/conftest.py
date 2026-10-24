@@ -1,22 +1,40 @@
 import os
 import re
-import tempfile
+from pathlib import Path
 
+import psycopg
 import pytest
 
-# Use a throwaway database and no real Telegram/SMTP for tests.
-_tmp = tempfile.mkdtemp()
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
+# A throwaway PostgreSQL database built from schema.sql, and no real Telegram/SMTP.
+TEST_DB = os.environ.get("TEST_DATABASE_NAME", "ainews_test")
+os.environ["DATABASE_URL"] = f"postgresql+psycopg:///{TEST_DB}"
 os.environ["TELEGRAM_BOT_TOKEN"] = ""
 os.environ["SMTP_HOST"] = ""
 os.environ["SECRET_KEY"] = "test-secret"
 
+SCHEMA = Path(__file__).resolve().parents[2] / "schema.sql"
+
+
+def _create_test_database() -> None:
+    try:
+        with psycopg.connect("dbname=postgres", autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB}" WITH (FORCE)')
+            conn.execute(f'CREATE DATABASE "{TEST_DB}"')
+    except psycopg.OperationalError as e:
+        pytest.exit(f"Tests need a local PostgreSQL server: {e}", returncode=2)
+    with psycopg.connect(f"dbname={TEST_DB}", autocommit=True) as conn:
+        conn.execute(SCHEMA.read_text())
+
+
+_create_test_database()
+
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 from app import adapters  # noqa: E402
 from app.adapters import ChannelAdapter, SendResult  # noqa: E402
-from app.db import Base, engine  # noqa: E402
-from app.main import app, init_db  # noqa: E402
+from app.db import engine  # noqa: E402
+from app.main import app  # noqa: E402
 
 
 class FakeAdapter(ChannelAdapter):
@@ -54,9 +72,10 @@ def fakes(monkeypatch):
 
 @pytest.fixture()
 def client(fakes):
-    Base.metadata.drop_all(engine)
-    init_db()
-    with TestClient(app) as c:
+    with engine.begin() as conn:
+        tables = conn.scalars(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).all()
+        conn.execute(text(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE"))
+    with TestClient(app) as c:  # startup seeds the collector's sources
         yield c
 
 

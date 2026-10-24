@@ -3,37 +3,34 @@
 The news items are real articles (titles and links) published by the seeded
 sources in October 2026. Delivery times and statuses are made up for the demo.
 
-Run from anywhere (uses the same DATABASE_URL as the API):
+Run from anywhere (uses the same PostgreSQL DATABASE_URL as the API):
     python seed_demo.py
     python seed_demo.py --email demo@ainewsletter.dev --password demo1234 --channel-email you@gmail.com
 
 Running it again replaces the demo account and its history, so it is safe to repeat.
 """
 import argparse
-import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from decimal import Decimal
 
-# Resolve the default sqlite:///./ainews.db next to this file, like `uvicorn` run from api/.
-os.chdir(Path(__file__).resolve().parent)
+from sqlalchemy import delete, func, select
 
-from sqlalchemy import delete, func, select  # noqa: E402
-
-from app.db import SessionLocal  # noqa: E402
-from app.main import init_db  # noqa: E402
-from app.models import (  # noqa: E402
-    Channel,
+from app.db import SessionLocal  # also puts the repo root on the path (app/__init__.py)
+from app.main import init_db
+from app.models import (
+    ChannelConnection,
     ChannelType,
     Delivery,
     DeliveryStatus,
-    FollowedSource,
     ImportanceLevel,
     NewsItem,
-    Profile,
     Source,
+    SourceType,
+    SubscriberProfile,
     User,
 )
-from app.security import hash_password  # noqa: E402
+from app.security import contact_hash, encrypt_contact, hash_password
+from collector.content import canonicalize
 
 HIGH, MEDIUM, LOW = ImportanceLevel.high, ImportanceLevel.medium, ImportanceLevel.low
 
@@ -106,52 +103,76 @@ def _at(stamp: str) -> datetime:
     return datetime.strptime(f"2026-{stamp}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
 
 
+# The collector's sources under the names used in DEMO_NEWS.
+SOURCE_ALIASES = {"OpenAI Blog": "OpenAI News", "Google DeepMind Blog": "Google AI Blog"}
+# Demo-only sources the collector does not scrape (inactive, so they stay out of the source list).
+DEMO_ONLY_SOURCES = {
+    "Anthropic News": "https://www.anthropic.com/news",
+    "Meta AI Blog": "https://ai.meta.com/blog/",
+    "TechCrunch AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
+}
+SCORE = {HIGH: Decimal(80), MEDIUM: Decimal(50), LOW: Decimal(20)}  # inside each level's band (Section 6.3.2)
+
+
+def _source_ids(db) -> dict[str, int]:
+    for name, url in DEMO_ONLY_SOURCES.items():
+        if not db.scalar(select(Source.source_id).where(Source.url == url)):
+            db.add(Source(name=name, source_type=SourceType.html, url=url, base_weight=30, is_active=False, config={"demo_only": True}))
+    db.flush()
+    ids = {s.name: s.source_id for s in db.scalars(select(Source))}
+    return {name: ids[SOURCE_ALIASES.get(name, name)] for name, *_ in DEMO_NEWS}
+
+
 def seed(email: str, password: str, channel_email: str) -> None:
-    init_db()  # creates tables and the 8 sources if the database is new
+    init_db()  # checks the schema and adds the collector's sources if the database is new
     with SessionLocal() as db:
-        # Start clean: foreign keys cascade to the profile, channels, sessions and deliveries.
-        links = [link for _, _, link, _, _ in DEMO_NEWS]
+        # Start clean: deleting the user cascades to the profile, channels and sessions.
+        urls = [canonicalize(link) for _, _, link, _, _ in DEMO_NEWS]
+        old_items = select(NewsItem.item_id).where(NewsItem.canonical_url.in_(urls))
+        db.execute(delete(Delivery).where(Delivery.item_id.in_(old_items)))
+        db.execute(delete(NewsItem).where(NewsItem.canonical_url.in_(urls)))
         db.execute(delete(User).where(func.lower(User.email) == email))
-        db.execute(delete(NewsItem).where(NewsItem.link.in_(links)))
+        # One email address can only be connected to one account.
+        db.execute(delete(ChannelConnection).where(
+            ChannelConnection.channel_type == ChannelType.email, ChannelConnection.contact_hash == contact_hash(channel_email)))
 
         user = User(email=email, password_hash=hash_password(password), created_at=_at("10-01 09:00"))
+        # "Everything" so low items in the history match the user's settings.
+        user.profile = SubscriberProfile(default_threshold=LOW, follows_all=True)
         db.add(user)
         db.flush()
-        # "Everything" so low items in the history match the user's settings.
-        db.add(Profile(user_id=user.id, default_threshold=LOW))
-        for source_id in db.scalars(select(Source.id).where(Source.is_active)):
-            db.add(FollowedSource(user_id=user.id, source_id=source_id))
-        channel = Channel(
-            user_id=user.id,
+        channel = ChannelConnection(
+            user_id=user.user_id,
             channel_type=ChannelType.email,
-            contact=channel_email,
+            contact_encrypted=encrypt_contact(channel_email),
+            contact_hash=contact_hash(channel_email),
             is_enabled=True,
             is_verified=True,
+            verified_at=_at("10-01 09:05"),
             created_at=_at("10-01 09:05"),
         )
         db.add(channel)
-        db.flush()
 
-        sources = {s.name: s.id for s in db.scalars(select(Source))}
+        sources = _source_ids(db)
         for name, title, link, level, published in DEMO_NEWS:
             found_at = _at(published) + timedelta(minutes=12)
-            item = NewsItem(source_id=sources[name], title=title, link=link, importance_level=level, created_at=found_at)
+            item = NewsItem(
+                source_id=sources[name], title=title, url=link, canonical_url=canonicalize(link),
+                published_at=_at(published), collected_at=found_at,
+                importance_score=SCORE[level], importance_level=level,
+                classified_at=found_at + timedelta(minutes=1), dispatched_at=found_at + timedelta(minutes=3),
+            )
             db.add(item)
             db.flush()
 
-            d = Delivery(
-                user_id=user.id,
-                item_id=item.id,
-                channel_id=channel.id,
-                channel_type=ChannelType.email,
-                created_at=found_at + timedelta(minutes=3),
-            )
+            created = found_at + timedelta(minutes=3)
+            d = Delivery(item_id=item.item_id, channel_id=channel.channel_id, created_at=created, next_attempt_at=created)
             if link in FAILED:
                 d.status, d.attempts, d.last_error = DeliveryStatus.failed, 3, FAILED[link]
             elif link in QUEUED:
                 d.status, d.attempts = DeliveryStatus.queued, 0
             else:
-                d.status, d.attempts, d.sent_at = DeliveryStatus.sent, 1, d.created_at + timedelta(seconds=40)
+                d.status, d.attempts, d.sent_at = DeliveryStatus.sent, 1, created + timedelta(seconds=40)
             db.add(d)
         db.commit()
 

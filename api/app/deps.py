@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import AuthSession, User
+from .models import User, UserSession
 from .security import sha256
 
 COOKIE_NAME = "ainews_session"
@@ -18,11 +18,10 @@ def current_user(
 ) -> User:
     if not token:
         raise HTTPException(401, "Please log in.")
-    row = db.scalar(select(AuthSession).where(AuthSession.token_hash == sha256(token)))
+    row = db.scalar(select(UserSession).where(UserSession.token_hash == sha256(token)))
     if not row:
         raise HTTPException(401, "Please log in.")
-    expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
-    if expires < datetime.now(timezone.utc):
+    if row.expires_at < datetime.now(timezone.utc):
         db.delete(row)
         db.commit()
         raise HTTPException(401, "Your session expired. Please log in again.")

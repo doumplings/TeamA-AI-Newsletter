@@ -1,11 +1,9 @@
 # News collector (UC scrape cycle)
 
 The collector uses **root `models.py` and `schema.sql` (PostgreSQL)**. The web
-API currently has a separate, incompatible set of models in `api/app/models.py`.
-Do not run the API's `init_db` against the collector database: its `sources`,
-`news_items`, users and delivery columns differ. Schema unification is still
-needed before collected news can flow into the current web UI. Collection does
-not classify news or send alerts; those are subsequent pipeline stages.
+API uses the same models and database, so collected news shows up in the web UI
+(dashboard, "Latest AI news"); see [SETUP.md](SETUP.md). Collection does not
+classify news or send alerts; those are subsequent pipeline stages.
 
 ## Install and run
 

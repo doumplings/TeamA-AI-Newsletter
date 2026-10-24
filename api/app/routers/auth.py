@@ -7,7 +7,7 @@ from .. import config
 from ..adapters import EMAIL_RE
 from ..db import get_db
 from ..deps import COOKIE_NAME, current_user
-from ..models import AuthSession, FollowedSource, Profile, Source, User
+from ..models import SubscriberProfile, User, UserSession
 from ..schemas import AccountView, LoginRequest, RegisterRequest
 from ..security import hash_password, new_session_token, session_expiry, sha256, verify_password
 
@@ -15,12 +15,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _account(user: User) -> AccountView:
-    return AccountView(user_id=user.id, email=user.email, role=user.role)
+    return AccountView(user_id=user.user_id, email=user.email, role=user.role)
 
 
 def _start_session(db: Session, user: User, response: Response) -> None:
     token = new_session_token()
-    db.add(AuthSession(user_id=user.id, token_hash=sha256(token), expires_at=session_expiry()))
+    db.add(UserSession(user_id=user.user_id, token_hash=sha256(token), expires_at=session_expiry()))
+    user.last_login_at = func.now()
     db.commit()
     response.set_cookie(
         COOKIE_NAME,
@@ -41,15 +42,11 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
     if db.scalar(select(User).where(func.lower(User.email) == email)):
         raise HTTPException(409, {"message": "An account with this email already exists.", "fields": {"email": "Already registered. Try logging in."}})
 
+    # New accounts: default level High, following every source (follows_all, C8).
     user = User(email=email, password_hash=hash_password(req.password))
+    user.profile = SubscriberProfile(follows_all=True)
     db.add(user)
     db.flush()
-    # New accounts: default level High, following every active source.
-    profile = Profile(user_id=user.id)
-    db.add(profile)
-    for source_id in db.scalars(select(Source.id).where(Source.is_active)):
-        db.add(FollowedSource(user_id=user.id, source_id=source_id))
-    db.commit()
 
     _start_session(db, user, response)
     return _account(user)
@@ -67,7 +64,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
 @router.post("/logout", status_code=204)
 def logout(response: Response, db: Session = Depends(get_db), token: str | None = Cookie(default=None, alias=COOKIE_NAME)):
     if token:
-        db.execute(delete(AuthSession).where(AuthSession.token_hash == sha256(token)))
+        db.execute(delete(UserSession).where(UserSession.token_hash == sha256(token)))
         db.commit()
     response.delete_cookie(COOKIE_NAME, path="/")
     response.status_code = 204

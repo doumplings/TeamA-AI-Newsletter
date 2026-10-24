@@ -1,22 +1,27 @@
 """Settings read from environment variables (or a .env file next to this folder)."""
 import os
-import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+_API_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_API_DIR / ".env")
+load_dotenv(_API_DIR.parent / ".env")  # the repo-root .env the collector reads; api/.env wins
 
 
 def _get(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
-DATABASE_URL = _get("DATABASE_URL", "sqlite:///./ainews.db")
+# The same PostgreSQL database the collector writes to (created with schema.sql).
+DATABASE_URL = _get("DATABASE_URL") or _get("COLLECTOR_DATABASE_URL") or "postgresql+psycopg:///ainews"
 
-# Used to sign the Telegram start-link token. Set a fixed value in .env,
-# otherwise links stop working every time the server restarts.
-SECRET_KEY = _get("SECRET_KEY") or secrets.token_hex(32)
+# Signs the Telegram start-link token and is the key for encrypting channel
+# contacts (chat IDs, emails, webhook URLs). It must stay the same between
+# restarts, or saved channels can no longer be read.
+SECRET_KEY = _get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("Set SECRET_KEY in api/.env (any long random string, e.g. `python -c \"import secrets; print(secrets.token_hex(32))\"`).")
 
 # Session cookie (Change 7: sessions last 7 days)
 SESSION_DAYS = 7
