@@ -6,6 +6,8 @@ created by ``psql -f schema.sql``, never by the API.
 from models import (  # noqa: F401
     ChannelConnection,
     ChannelType,
+    CycleRun,
+    CycleType,
     Delivery,
     DeliveryStatus,
     FollowedSource,

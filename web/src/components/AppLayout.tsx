@@ -9,6 +9,12 @@ const NAV = [
   { to: '/dashboard/history', label: 'History', end: false, icon: 'M12 8v4l3 3M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9Z' },
 ];
 
+/** Only shown to admin accounts (UC-9 and pipeline status). */
+const ADMIN_NAV = [
+  { to: '/dashboard/admin/sources', label: 'Sources', end: false, icon: 'M4 6c0-1.1 3.6-2 8-2s8 .9 8 2-3.6 2-8 2-8-.9-8-2Zm0 0v6c0 1.1 3.6 2 8 2s8-.9 8-2V6M4 12v6c0 1.1 3.6 2 8 2s8-.9 8-2v-6' },
+  { to: '/dashboard/admin/pipeline', label: 'Pipeline', end: false, icon: 'M3 12h4l3-8 4 16 3-8h4' },
+];
+
 /** Shell for the signed-in pages: sidebar on desktop, tabs on phones. */
 export function AppLayout() {
   const { account, logout } = useAuth();
@@ -18,6 +24,8 @@ export function AppLayout() {
     await logout();
     navigate('/', { replace: true });
   }
+
+  const isAdmin = account?.role === 'admin';
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
@@ -40,6 +48,9 @@ export function AppLayout() {
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.end} className={linkClass}>{n.label}</NavLink>
           ))}
+          {isAdmin && ADMIN_NAV.map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.end} className={linkClass}>Admin: {n.label}</NavLink>
+          ))}
         </nav>
       </header>
 
@@ -54,6 +65,19 @@ export function AppLayout() {
                 {n.label}
               </NavLink>
             ))}
+            {isAdmin && (
+              <>
+                <p className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-slate-400">Admin</p>
+                {ADMIN_NAV.map((n) => (
+                  <NavLink key={n.to} to={n.to} end={n.end} className={linkClass}>
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d={n.icon} />
+                    </svg>
+                    {n.label}
+                  </NavLink>
+                ))}
+              </>
+            )}
           </nav>
         </aside>
         <main className="min-w-0 flex-1">

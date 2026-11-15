@@ -41,6 +41,30 @@ class SendResult:
     ok: bool
     permanent: bool = False  # True when retrying cannot help (e.g. deleted webhook)
     error: str | None = None
+    retry_after: float | None = None  # seconds the channel's rate limit asked us to wait
+
+
+SUMMARY_LIMIT = 300
+
+
+def _shorten(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Wait asked for by a 429: Telegram and Discord put it in the JSON body, others in a header."""
+    try:
+        body = response.json()
+        value = body.get("retry_after") or (body.get("parameters") or {}).get("retry_after")
+        if value is not None:
+            return float(value)
+    except (ValueError, AttributeError, TypeError):
+        pass
+    try:
+        return float(response.headers["Retry-After"])
+    except (KeyError, ValueError):
+        return None
 
 
 class ChannelAdapter:
@@ -52,6 +76,18 @@ class ChannelAdapter:
 
     def mask(self, contact: str) -> str:
         return "•••" + contact[-3:]
+
+    def format_message(self, item, source_name: str) -> Message:
+        """Turn a story into a message: source, headline, level, one-line summary and link (UC-14).
+
+        The headline is the subject (the email subject line; shown in bold elsewhere).
+        """
+        level = getattr(item.importance_level, "value", item.importance_level) or "low"
+        text = f"{str(level).capitalize()} importance · {source_name}"
+        summary = _shorten(item.summary or item.body or "", SUMMARY_LIMIT)
+        if summary:
+            text += f"\n\n{summary}"
+        return Message(subject=_shorten(item.title, 200), text=text, link=item.url)
 
     def send(self, contact: str, message: Message) -> SendResult:
         raise NotImplementedError
@@ -76,9 +112,11 @@ class TelegramAdapter(ChannelAdapter):
                 timeout=15,
             )
         except httpx.HTTPError as e:
-            return SendResult(False, False, f"Network error: {e}")
+            return SendResult(False, False, f"Network error: {type(e).__name__}")  # never the URL: it holds the bot token
         if r.status_code == 200:
             return SendResult(True)
+        if r.status_code == 429:
+            return SendResult(False, False, "Rate limited by Telegram", _retry_after(r))
         # 400/403: chat not found or the user blocked the bot -> retrying will not help
         return SendResult(False, r.status_code in (400, 403), f"Telegram said {r.status_code}: {r.text[:200]}")
 
@@ -100,11 +138,18 @@ class DiscordAdapter(ChannelAdapter):
         if message.link:
             content += f"\n{message.link}"
         try:
-            r = httpx.post(contact, json={"content": content[:2000], "username": "AI Newsletter"}, timeout=15)
+            r = httpx.post(
+                contact,
+                # allowed_mentions: a headline containing @everyone must not ping the server
+                json={"content": content[:2000], "username": "AI Newsletter", "allowed_mentions": {"parse": []}},
+                timeout=15,
+            )
         except httpx.HTTPError as e:
-            return SendResult(False, False, f"Network error: {e}")
+            return SendResult(False, False, f"Network error: {type(e).__name__}")  # the URL is the credential
         if r.status_code in (200, 204):
             return SendResult(True)
+        if r.status_code == 429:
+            return SendResult(False, False, "Rate limited by Discord", _retry_after(r))
         if r.status_code in (401, 403, 404):
             return SendResult(False, True, "This Discord webhook no longer exists. Create a new one.")
         return SendResult(False, False, f"Discord said {r.status_code}")

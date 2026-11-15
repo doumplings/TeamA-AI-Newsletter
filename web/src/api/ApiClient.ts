@@ -1,11 +1,14 @@
 import type {
   AccountView,
+  AdminSourceRequest,
+  AdminSourceView,
   ChannelChanges,
   ChannelType,
   ChannelView,
   HistoryPageView,
   ImportanceLevel,
   NewsView,
+  PipelineStatusView,
   ProfileView,
   SendTestResult,
   SourceView,
@@ -55,6 +58,15 @@ export interface ApiClient {
 
   /** Sends one sample news item to every verified channel, so you can see delivery work. */
   sendSampleNews(): Promise<{ delivered: number; failed: number }>;
+
+  // Source administration (UC-9) and pipeline status; admin accounts only (server answers 403 otherwise)
+  adminListSources(): Promise<AdminSourceView[]>;
+  /** 409 = URL already registered; 422 carries field errors. */
+  adminAddSource(req: AdminSourceRequest): Promise<AdminSourceView>;
+  adminUpdateSource(sourceId: number, changes: Partial<AdminSourceRequest>): Promise<AdminSourceView>;
+  /** 409 = the source has collected news, disable it instead. */
+  adminDeleteSource(sourceId: number): Promise<void>;
+  adminPipelineStatus(): Promise<PipelineStatusView>;
 }
 
 /** Error thrown by both clients, so pages can show it the same way. */

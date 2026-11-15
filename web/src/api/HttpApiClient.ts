@@ -3,12 +3,15 @@ import type { ApiClient } from './ApiClient';
 import { ApiError } from './ApiClient';
 import type {
   AccountView,
+  AdminSourceRequest,
+  AdminSourceView,
   ChannelChanges,
   ChannelType,
   ChannelView,
   HistoryPageView,
   ImportanceLevel,
   NewsView,
+  PipelineStatusView,
   ProfileView,
   SendTestResult,
   SourceView,
@@ -105,6 +108,23 @@ export class HttpApiClient implements ApiClient {
   }
   async sendSampleNews() {
     return (await this.http.post<{ delivered: number; failed: number }>('/deliveries/sample')).data;
+  }
+
+  // ---- Admin: sources (UC-9) and pipeline status ----
+  async adminListSources() {
+    return (await this.http.get<AdminSourceView[]>('/admin/sources')).data;
+  }
+  async adminAddSource(req: AdminSourceRequest) {
+    return (await this.http.post<AdminSourceView>('/admin/sources', req)).data;
+  }
+  async adminUpdateSource(sourceId: number, changes: Partial<AdminSourceRequest>) {
+    return (await this.http.patch<AdminSourceView>(`/admin/sources/${sourceId}`, changes)).data;
+  }
+  async adminDeleteSource(sourceId: number) {
+    await this.http.delete(`/admin/sources/${sourceId}`);
+  }
+  async adminPipelineStatus() {
+    return (await this.http.get<PipelineStatusView>('/admin/pipeline')).data;
   }
 }
 

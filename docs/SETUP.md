@@ -32,47 +32,71 @@ shows you the code because nothing is really sent. Use this mode to work on the 
 
 ## 2. Run it live
 
-The API and the collector share **one PostgreSQL database** built from `schema.sql`
-(root `models.py`). The collector writes news into it; the API reads it for the web app.
+The API and the worker share **one PostgreSQL database** built from `schema.sql`
+(root `models.py`). The worker collects, scores and sends news; the API reads and writes
+the same tables for the web app. Both read one `.env` file at the repo root.
 
-One-time setup (from the repo root, with PostgreSQL running):
+### The database (hosted on Supabase)
+
+1. [supabase.com/dashboard](https://supabase.com/dashboard) -> **New project**. Save the database password.
+2. **Connect** (top bar) -> **Session pooler** -> copy the URI and put it in `.env` as `DATABASE_URL`,
+   with the password filled in. Use the Session pooler (port 5432), not the Transaction pooler
+   (6543): the collector takes a session-level advisory lock.
+3. `python init_db.py` creates the tables and adds the default sources and scoring rules.
+
+Any PostgreSQL 16+ works the same way (for a local one: `createdb ainews`, then
+`DATABASE_URL=postgresql:///ainews`). `init_db.py` needs no `psql`.
+
+In the Supabase dashboard, **Table Editor** shows the rows of every table and
+**Database -> Schema Visualizer** draws the tables with their foreign-key links.
+Row-level security is on for every table, so they are not reachable through Supabase's
+public REST API; the app connects as the table owner and is not affected.
+
+### One-time setup (from the repo root)
 
 ```bash
-createdb ainews
-psql -d ainews -f schema.sql                          # creates all tables (run once per new database)
-python3 -m venv .venv && source .venv/bin/activate    # one environment for the API and the collector
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp api/.env.example api/.env                          # set SECRET_KEY, check DATABASE_URL
+cp .env.example .env                                  # set DATABASE_URL and SECRET_KEY
+python init_db.py                                     # tables, default sources, scoring rules
+python api/seed_demo.py                               # optional: demo account, history, administrator
 ```
 
-Then three terminals, each with `source .venv/bin/activate` from the repo root:
+On Windows, keep the repository in a short path (for example `C:\Users\you\TeamA-AI-Newsletter`)
+and run `git config core.longpaths true`; a long path stops Python loading SQLAlchemy.
+
+Then three terminals, each with the environment activated, from the repo root:
 
 ```bash
 # Terminal 1: API (http://localhost:8000/docs)
-cd api && uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --app-dir api --reload --port 8000
 ```
 
 ```bash
-# Terminal 2: collector, scrapes the sources into the same database
-export COLLECTOR_DATABASE_URL=postgresql+psycopg:///ainews
-python -m collector --once        # one cycle now; drop --once to repeat every 30 seconds
+# Terminal 2: worker: scrape, classify and dispatch cycles on their intervals (docs/PIPELINE.md)
+python -m scheduler --backfill-hours 72
 ```
 
 ```bash
 # Terminal 3: web app (http://localhost:5173), with VITE_API_MODE=live in web/.env
-cd web && npm run dev
+cd web && npm install && npm run dev
 ```
 
-Collected stories show up on the dashboard under **Latest AI news**. They are not scored or
-sent yet: that needs the classifier and the dispatcher (next pipeline stages).
-`python api/seed_demo.py` adds a demo account with a notification history.
+Collected stories show up on the dashboard under **Latest AI news** with their importance
+level, and the ones that clear a subscriber's threshold are sent to their channels and
+listed in **History**. Administrators also get **Admin -> Sources** and **Admin -> Pipeline**.
 
-With nothing filled in `api/.env`, sign-up, email (codes are printed in Terminal 1),
-the dashboard and history already work. To make each channel really deliver:
+| Account from `seed_demo.py` | Password | What it shows |
+|---|---|---|
+| `demo@ainewsletter.dev` | `demo1234` | A subscriber with an email channel and a notification history |
+| `admin@ainewsletter.dev` | `admin1234` | The Admin pages (source list, pipeline status) |
+
+With only `DATABASE_URL` and `SECRET_KEY` filled in, sign-up, email (codes and news are
+printed in the terminal), the dashboard and history already work. To make each channel really deliver:
 
 ### Telegram (about 2 minutes)
 1. In Telegram, open **@BotFather** → `/newbot` → pick a name and a username ending in `bot`.
-2. Copy the token into `TELEGRAM_BOT_TOKEN` in `api/.env` and restart the API.
+2. Copy the token into `TELEGRAM_BOT_TOKEN` in `.env` and restart the API and the worker.
 3. In the app, pick Telegram → **Open Telegram** → press **Start**. The page notices within 2 seconds.
 
 Locally the API uses **polling** (it asks Telegram for new messages), so you don't need a public URL.
@@ -90,8 +114,9 @@ For Gmail: turn on 2-Step Verification, create an **App Password**, then set
 ## 3. Tests
 
 ```bash
-cd api && pytest -q        # 17 API tests against a throwaway `ainews_test` PostgreSQL database
-cd web && npm run build    # type-checks all the TypeScript
+python -m pytest tests -q         # pipeline: classifier, same-story check, dispatcher, retry, scheduler
+cd api && python -m pytest -q     # API tests against a throwaway `ainews_test` PostgreSQL database
+cd web && npm run build           # type-checks all the TypeScript
 ```
 
 ---
@@ -120,7 +145,8 @@ stored only as SHA-256 hashes. Channel contacts are encrypted (Fernet, keyed fro
 with a keyed hash for lookups. The client only ever sees masked contacts.
 
 ## Not done yet / next steps
-- Collected news is not scored (classifier, UC-12) or sent automatically (dispatcher, UC-13/14) yet.
 - A removed channel's deliveries leave the subscriber's history: `deliveries` has no `user_id`, and its `channel_id` becomes NULL (C2).
-- "Send me a sample news item" stands in for the real Dispatcher until UC-13/14 are merged. It uses the same adapters (`api/app/adapters.py`).
+- "Send me a sample news item" sends one made-up item straight away, without waiting for the worker. It uses the same adapters as the Dispatcher (`api/app/adapters.py`).
+- Email goes out over SMTP, not a provider's HTTPS API (Section 5.4), so there is no bounce information.
+- HTML sources still need hand-written selectors in their settings.
 - There's no rate limiting on login or code sending yet.
