@@ -3,7 +3,10 @@
 The collector uses **root `models.py` and `schema.sql` (PostgreSQL)**. The web
 API uses the same models and database, so collected news shows up in the web UI
 (dashboard, "Latest AI news"); see [SETUP.md](SETUP.md). Collection does not
-classify news or send alerts; those are subsequent pipeline stages.
+classify news or send alerts; those are the next pipeline stages, and
+`python -m scheduler` runs all three on their intervals (see
+[PIPELINE.md](PIPELINE.md)). `python -m collector` still runs the scrape cycle
+on its own. On a database without `psql`, `python init_db.py` loads `schema.sql`.
 
 ## Install and run
 
@@ -171,11 +174,14 @@ historical articles. The collector no longer loads its bearer-token settings.
 - Canonical URLs remove fragments and common tracking parameters, sort queries,
   and are protected by the existing database unique constraint. Exact normalized
   title plus nonempty body/summary also discards reposts under different URLs.
-  Fuzzy/semantic matching (the remainder of UC-11) is not implemented.
+  The same story from another source (at least half of the title words shared,
+  at most 3 days apart) is stored, linked to the original with `duplicate_of`,
+  and raises the original's `corroboration_count` (`collector/dedup.py`).
 - Items and source success state commit atomically per source. A failed source
   rolls back and records its failure independently; later sources still run.
 - `cycle_runs.items_processed` is the number of inserted records, `failures` is
-  the number of failed sources; `notes` contains duplicate totals and errors.
+  the number of failed sources; `notes` contains duplicate totals, the number of
+  items linked to an original, and errors.
   Inspect `sources.last_error` and `consecutive_failures` for operational status.
 
 ## Tests
@@ -184,6 +190,11 @@ historical articles. The collector no longer loads its bearer-token settings.
 pip install pytest
 python -m pytest tests/test_collector.py tests/test_collector_api.py tests/test_collector_schedule.py -q
 ```
+
+These three files are not in the repository yet: `.gitignore` used to ignore every
+`tests` directory, so they were never committed. That rule is gone; whoever has them
+locally can add them. `tests/test_dedup.py` and `tests/test_pipeline.py` (same-story
+check, and a scrape cycle against saved feeds) are there now; see [PIPELINE.md](PIPELINE.md).
 
 Unit tests cover adapters, URL normalization, policies, pacing, 304 preservation,
 feed preference, and incomplete pagination. Run a real cycle against a disposable
