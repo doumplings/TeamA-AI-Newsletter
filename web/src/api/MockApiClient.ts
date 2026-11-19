@@ -3,13 +3,18 @@ import { ApiError } from './ApiClient';
 import { FAKE_NEWS, FAKE_SOURCES, slugLink } from './fakeData';
 import type {
   AccountView,
+  AdminSourceRequest,
+  AdminSourceView,
+  CycleRunView,
   ChannelChanges,
   ChannelType,
   ChannelView,
   DeliveryView,
   ImportanceLevel,
   NewsView,
+  PipelineStatusView,
   ProfileView,
+  SourceView,
 } from '../types';
 import { maskContact, validateContact, validateEmail } from '../lib/validation';
 
@@ -40,6 +45,8 @@ interface MockDb {
   channels: MockChannel[];
   profiles: Record<number, ProfileView>;
   deliveries: (DeliveryView & { userId: number })[];
+  /** Source list the admin screens edit. Missing in databases saved before UC-9, so it is filled on first use. */
+  adminSources?: AdminSourceView[];
 }
 
 const emptyDb = (): MockDb => ({
@@ -58,6 +65,24 @@ function loadDb(): MockDb {
   } catch {
     return emptyDb();
   }
+}
+
+/** Starting list for the admin screens: the fake sources plus believable collector state. */
+function seedAdminSources(): AdminSourceView[] {
+  const now = Date.now();
+  return FAKE_SOURCES.map((s, i) => {
+    const failing = s.sourceId === 4; // one source that is having trouble, so the error column has something to show
+    return {
+      ...s,
+      termsUrl: `${new URL(s.url).origin}/terms`,
+      config: s.sourceType === 'html' ? { item_selector: 'article', title_selector: 'h2', link_selector: 'a' } : {},
+      lastCheckedAt: new Date(now - (i + 1) * 4 * 60 * 1000).toISOString(),
+      lastSuccessAt: new Date(now - (failing ? 3 * 3600 * 1000 : (i + 1) * 4 * 60 * 1000)).toISOString(),
+      consecutiveFailures: failing ? 3 : 0,
+      lastError: failing ? 'HTTP 503 from the source' : null,
+      itemCount: FAKE_NEWS.filter((n) => n.sourceId === s.sourceId).length,
+    };
+  });
 }
 
 const wait = (ms = 350) => new Promise((r) => setTimeout(r, ms));
@@ -90,6 +115,35 @@ export class MockApiClient implements ApiClient {
     return ch;
   }
 
+  /** The admin source list, created from the fake sources the first time it is needed. */
+  private sources(): AdminSourceView[] {
+    if (!this.db.adminSources) this.db.adminSources = seedAdminSources();
+    return this.db.adminSources;
+  }
+
+  private findSource(sourceId: number): AdminSourceView {
+    const src = this.sources().find((x) => x.sourceId === sourceId);
+    if (!src) throw new ApiError('Source not found.', 404);
+    return src;
+  }
+
+  /** Same checks the server makes on a source; returns field errors, empty when fine. */
+  private checkSource(req: Partial<AdminSourceRequest>): Record<string, string> {
+    const errs: Record<string, string> = {};
+    if (req.name !== undefined && !req.name.trim()) errs.name = 'Name is required.';
+    for (const key of ['url', 'termsUrl'] as const) {
+      const value = req[key];
+      if (value === undefined) continue;
+      try {
+        if (!/^https?:$/.test(new URL(value).protocol)) throw new Error();
+      } catch {
+        errs[key] = 'Enter a full web address starting with http:// or https://';
+      }
+    }
+    if (req.baseWeight !== undefined && !(req.baseWeight >= 0 && req.baseWeight <= 30)) errs.baseWeight = 'Must be between 0 and 30.';
+    return errs;
+  }
+
   private view(ch: MockChannel): ChannelView {
     const { channelId, channelType, maskedContact, isEnabled, isVerified, minImportance } = ch;
     return { channelId, channelType, maskedContact, isEnabled, isVerified, minImportance };
@@ -109,7 +163,7 @@ export class MockApiClient implements ApiClient {
     this.db.profiles[userId] = { defaultThreshold: 'high', followedSourceIds: FAKE_SOURCES.map((s) => s.sourceId) };
     this.db.sessionUserId = userId;
     this.save();
-    return { userId, email, role: 'subscriber' };
+    return { userId, email, role: 'admin' };
   }
 
   async login(email: string, password: string): Promise<AccountView> {
@@ -118,7 +172,7 @@ export class MockApiClient implements ApiClient {
     if (!u) throw new ApiError('Email or password is incorrect.', 401);
     this.db.sessionUserId = u.userId;
     this.save();
-    return { userId: u.userId, email: u.email, role: 'subscriber' };
+    return { userId: u.userId, email: u.email, role: 'admin' };
   }
 
   async logout() {
@@ -130,7 +184,7 @@ export class MockApiClient implements ApiClient {
   async me(): Promise<AccountView | null> {
     await wait(100);
     const u = this.db.users.find((x) => x.userId === this.db.sessionUserId);
-    return u ? { userId: u.userId, email: u.email, role: 'subscriber' } : null;
+    return u ? { userId: u.userId, email: u.email, role: 'admin' } : null;
   }
 
   // ---------------- Channels ----------------
@@ -268,7 +322,9 @@ export class MockApiClient implements ApiClient {
 
   async getSources() {
     await wait(150);
-    return FAKE_SOURCES;
+    return this.sources()
+      .filter((x) => x.isActive)
+      .map((x): SourceView => ({ sourceId: x.sourceId, name: x.name, sourceType: x.sourceType, url: x.url, baseWeight: x.baseWeight, isActive: x.isActive }));
   }
 
   async getNews(limit = 10): Promise<NewsView[]> {
@@ -315,6 +371,122 @@ export class MockApiClient implements ApiClient {
     }
     this.save();
     return { delivered: targets.length, failed: 0 };
+  }
+
+  // ---------------- Admin: sources (UC-9) and pipeline status ----------------
+  async adminListSources() {
+    await wait(200);
+    this.requireUser();
+    return this.sources().map((x) => ({ ...x }));
+  }
+
+  async adminAddSource(req: AdminSourceRequest) {
+    await wait();
+    this.requireUser();
+    const errs = this.checkSource(req);
+    if (Object.keys(errs).length) throw new ApiError('Please check the highlighted fields.', 422, errs);
+    if (this.sources().some((x) => x.url.toLowerCase() === req.url.trim().toLowerCase())) {
+      throw new ApiError('A source with this URL is already registered.', 409, { url: 'Already registered.' });
+    }
+    const src: AdminSourceView = {
+      sourceId: this.id(),
+      name: req.name.trim(),
+      sourceType: req.sourceType,
+      url: req.url.trim(),
+      baseWeight: req.baseWeight,
+      isActive: req.isActive,
+      termsUrl: req.termsUrl.trim(),
+      config: req.config ?? {},
+      lastCheckedAt: null,
+      lastSuccessAt: null,
+      consecutiveFailures: 0,
+      lastError: null,
+      itemCount: 0,
+    };
+    this.sources().push(src);
+    this.save();
+    return { ...src };
+  }
+
+  async adminUpdateSource(sourceId: number, changes: Partial<AdminSourceRequest>) {
+    await wait();
+    this.requireUser();
+    const src = this.findSource(sourceId);
+    const errs = this.checkSource(changes);
+    if (Object.keys(errs).length) throw new ApiError('Please check the highlighted fields.', 422, errs);
+    if (changes.url && this.sources().some((x) => x !== src && x.url.toLowerCase() === changes.url!.trim().toLowerCase())) {
+      throw new ApiError('A source with this URL is already registered.', 409, { url: 'Already registered.' });
+    }
+    Object.assign(src, changes);
+    this.save();
+    return { ...src };
+  }
+
+  async adminDeleteSource(sourceId: number) {
+    await wait();
+    this.requireUser();
+    const src = this.findSource(sourceId);
+    if (src.itemCount > 0) {
+      throw new ApiError('This source has collected news, so it cannot be removed. Turn it off instead.', 409);
+    }
+    this.db.adminSources = this.sources().filter((x) => x !== src);
+    for (const p of Object.values(this.db.profiles)) p.followedSourceIds = p.followedSourceIds.filter((id) => id !== sourceId);
+    this.save();
+  }
+
+  async adminPipelineStatus(): Promise<PipelineStatusView> {
+    await wait(200);
+    this.requireUser();
+    const sources = this.sources();
+    const newsItems = FAKE_NEWS.length;
+    const high = FAKE_NEWS.filter((n) => n.level === 'high').length;
+    const medium = FAKE_NEWS.filter((n) => n.level === 'medium').length;
+
+    // A dozen recent cycles, a few minutes apart, newest first: scrape, classify, dispatch in turn.
+    const types = ['scrape', 'classify', 'dispatch'] as const;
+    const now = Date.now();
+    const runs: CycleRunView[] = Array.from({ length: 12 }, (_, i) => {
+      const cycleType = types[(11 - i) % 3];
+      const startedAt = now - (i * 4 + 1) * 60 * 1000;
+      const seconds = cycleType === 'scrape' ? 18 + (i % 4) * 5 : cycleType === 'classify' ? 6 + (i % 3) : 3 + (i % 2);
+      const itemsProcessed = cycleType === 'scrape' ? 3 + (i % 5) : cycleType === 'classify' ? 4 + (i % 4) : 2 + (i % 3);
+      const notes =
+        cycleType === 'scrape'
+          ? JSON.stringify({ sources: sources.filter((x) => x.isActive).length, new: itemsProcessed })
+          : cycleType === 'classify'
+            ? JSON.stringify({ scored: itemsProcessed })
+            : null;
+      return {
+        runId: 100 - i,
+        cycleType,
+        startedAt: new Date(startedAt).toISOString(),
+        finishedAt: i === 0 && cycleType === 'dispatch' ? null : new Date(startedAt + seconds * 1000).toISOString(),
+        itemsProcessed,
+        failures: i === 3 ? 1 : 0,
+        notes,
+      };
+    });
+
+    return {
+      counts: {
+        sources: sources.length,
+        activeSources: sources.filter((x) => x.isActive).length,
+        newsItems,
+        unclassified: 3,
+        undispatched: 5,
+        duplicates: 4,
+        high,
+        medium,
+        low: newsItems - high - medium,
+        deliveriesQueued: 2,
+        deliveriesSent: this.db.deliveries.filter((d) => d.status === 'sent').length + 40,
+        deliveriesFailed: 1,
+        deliveriesPermanentFailure: 1,
+        subscribers: this.db.users.length,
+        verifiedChannels: this.db.channels.filter((c) => c.isVerified).length,
+      },
+      runs,
+    };
   }
 
   // ---------------- helpers ----------------

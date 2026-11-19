@@ -4,6 +4,8 @@ import { AppLayout } from './components/AppLayout';
 import { PageSpinner } from './components/ui';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import AdminPipelinePage from './pages/AdminPipelinePage';
+import AdminSourcesPage from './pages/AdminSourcesPage';
 import ChannelSetupPage from './pages/ChannelSetupPage';
 import DashboardPage from './pages/DashboardPage';
 import HistoryPage from './pages/HistoryPage';
@@ -18,6 +20,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation();
   if (loading) return <PageSpinner />;
   if (!account) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  return <>{children}</>;
+}
+
+/** Admin-only pages: everyone else goes back to the dashboard. */
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { account } = useAuth();
+  if (account?.role !== 'admin') return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -43,6 +52,8 @@ export default function App() {
               <Route index element={<DashboardPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="history" element={<HistoryPage />} />
+              <Route path="admin/sources" element={<RequireAdmin><AdminSourcesPage /></RequireAdmin>} />
+              <Route path="admin/pipeline" element={<RequireAdmin><AdminPipelinePage /></RequireAdmin>} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

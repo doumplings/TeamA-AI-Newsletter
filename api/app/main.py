@@ -14,7 +14,7 @@ from collector.sources import seed_source
 
 from . import config, telegram_bot
 from .db import SessionLocal, engine
-from .routers import auth, channels, subscriber
+from .routers import admin, auth, channels, subscriber
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't print URLs (they contain the bot token)
@@ -51,6 +51,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(subscriber.router)
+app.include_router(admin.router)
 app.include_router(telegram_bot.router)
 
 

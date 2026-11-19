@@ -80,9 +80,28 @@ DefaultTrue = Annotated[bool, mapped_column(server_default=text("true"))]
 DefaultFalse = Annotated[bool, mapped_column(server_default=text("false"))]
 
 
+def normalize_database_url(url: str) -> str:
+    """Accept the plain ``postgresql://`` URI hosted providers hand out.
+
+    SQLAlchemy would pick the psycopg2 driver for it; the project uses psycopg 3.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def make_engine(url: str | None = None) -> Engine:
     """Create an engine from ``url`` or the ``DATABASE_URL`` environment variable."""
-    return create_engine(url or os.environ["DATABASE_URL"], pool_pre_ping=True)
+    # A small pool: hosted poolers (e.g. Supabase session mode) cap client connections,
+    # and the API and the worker each hold their own pool. Recycle before idle timeouts.
+    return create_engine(
+        normalize_database_url(url or os.environ["DATABASE_URL"]),
+        pool_pre_ping=True,
+        pool_size=4,
+        max_overflow=4,
+        pool_recycle=300,
+    )
 
 
 def make_session_factory(engine: Engine | None = None) -> sessionmaker[Session]:
@@ -972,6 +991,27 @@ class DeliveryRepository(_Repository):
             .returning(Delivery.status)
         )
         return self.db.scalars(stmt).one()
+
+    def mark_permanent_failure(self, delivery_id: int, error: str) -> None:
+        """Give up on a delivery after an error retrying cannot fix (e.g. a deleted webhook)."""
+        self.db.execute(
+            update(Delivery)
+            .where(Delivery.delivery_id == delivery_id)
+            .values(
+                status=DeliveryStatus.permanent_failure,
+                attempts=func.least(Delivery.attempts + 1, MAX_DELIVERY_ATTEMPTS),
+                last_error=error,
+            )
+        )
+
+
+class ScoringRuleRepository(_Repository):
+    """Persistence for the classifier's rule set."""
+
+    def active(self) -> Sequence[ScoringRule]:
+        """Rules currently in use, in code order."""
+        stmt = select(ScoringRule).where(ScoringRule.is_active.is_(True)).order_by(ScoringRule.code)
+        return self.db.scalars(stmt).all()
 
 
 class CycleRunRepository(_Repository):

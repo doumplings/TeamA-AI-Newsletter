@@ -1,10 +1,11 @@
 """JSON shapes of the API (Table 8-4 in Report 2). Field names are camelCase on the wire."""
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from .models import ChannelType, DeliveryStatus, ImportanceLevel, SourceType
+from .models import ChannelType, CycleType, DeliveryStatus, ImportanceLevel, SourceType
 
 
 class CamelModel(BaseModel):
@@ -119,3 +120,74 @@ class HistoryPageView(CamelModel):
 class SampleResult(CamelModel):
     delivered: int
     failed: int
+
+
+# ----- source administration and pipeline status (UC-9; admin accounts only) -----
+class AdminSourceRequest(CamelModel):
+    name: str = Field(min_length=1, max_length=120)
+    source_type: SourceType
+    url: str = Field(min_length=1, max_length=2000)
+    base_weight: int = Field(ge=0, le=30)
+    is_active: bool = True
+    terms_url: str = Field(min_length=1, max_length=2000)
+    config: dict[str, Any] | None = None
+
+
+class AdminSourceUpdate(CamelModel):
+    """PATCH body: only the fields that are sent are changed."""
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    source_type: SourceType | None = None
+    url: str | None = Field(default=None, min_length=1, max_length=2000)
+    base_weight: int | None = Field(default=None, ge=0, le=30)
+    is_active: bool | None = None
+    terms_url: str | None = Field(default=None, min_length=1, max_length=2000)
+    config: dict[str, Any] | None = None
+
+
+class AdminSourceView(CamelModel):
+    source_id: int
+    name: str
+    source_type: SourceType
+    url: str
+    base_weight: int
+    is_active: bool
+    terms_url: str | None
+    config: dict[str, Any]
+    last_checked_at: datetime | None
+    last_success_at: datetime | None
+    consecutive_failures: int
+    last_error: str | None
+    item_count: int
+
+
+class CycleRunView(CamelModel):
+    run_id: int
+    cycle_type: CycleType
+    started_at: datetime
+    finished_at: datetime | None
+    items_processed: int
+    failures: int
+    notes: str | None
+
+
+class PipelineCounts(CamelModel):
+    sources: int
+    active_sources: int
+    news_items: int
+    unclassified: int
+    undispatched: int
+    duplicates: int
+    high: int
+    medium: int
+    low: int
+    deliveries_queued: int
+    deliveries_sent: int
+    deliveries_failed: int
+    deliveries_permanent_failure: int
+    subscribers: int
+    verified_channels: int
+
+
+class PipelineStatusView(CamelModel):
+    counts: PipelineCounts
+    runs: list[CycleRunView]

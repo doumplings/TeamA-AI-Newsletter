@@ -101,3 +101,55 @@ export const CHANNEL_LABEL: Record<ChannelType, string> = {
   email: 'Email',
   discord: 'Discord',
 };
+
+// ---- Admin: source management (UC-9) and pipeline status ----
+
+export type CycleType = 'scrape' | 'classify' | 'dispatch';
+
+export interface AdminSourceView {
+  sourceId: number;
+  name: string;
+  sourceType: SourceType;
+  url: string;
+  baseWeight: number; // 0-30: source points (30 official, 20 news site, 10 community)
+  isActive: boolean;
+  termsUrl: string | null; // reviewed terms-of-use page; the collector refuses sources without it
+  config: Record<string, unknown>;
+  lastCheckedAt: string | null;
+  lastSuccessAt: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+  itemCount: number; // news items collected from this source
+}
+
+/** POST body (all required except config). PATCH sends a Partial of this. */
+export interface AdminSourceRequest {
+  name: string;
+  sourceType: SourceType;
+  url: string;
+  baseWeight: number;
+  isActive: boolean;
+  termsUrl: string;
+  config?: Record<string, unknown>;
+}
+
+export interface CycleRunView {
+  runId: number;
+  cycleType: CycleType;
+  startedAt: string;
+  finishedAt: string | null; // null = still running or did not finish
+  itemsProcessed: number;
+  failures: number;
+  notes: string | null; // usually a small JSON string; show it compactly
+}
+
+export interface PipelineStatusView {
+  counts: {
+    sources: number; activeSources: number;
+    newsItems: number; unclassified: number; undispatched: number; duplicates: number;
+    high: number; medium: number; low: number;
+    deliveriesQueued: number; deliveriesSent: number; deliveriesFailed: number; deliveriesPermanentFailure: number;
+    subscribers: number; verifiedChannels: number;
+  };
+  runs: CycleRunView[]; // newest first, up to 30
+}

@@ -7,6 +7,9 @@ Run from anywhere (uses the same PostgreSQL DATABASE_URL as the API):
     python seed_demo.py
     python seed_demo.py --email demo@ainewsletter.dev --password demo1234 --channel-email you@gmail.com
 
+It also adds an administrator (admin@ainewsletter.dev / admin1234 unless you pass
+--admin-email / --admin-password), who sees the Admin pages: Sources (UC-9) and Pipeline.
+
 Running it again replaces the demo account and its history, so it is safe to repeat.
 """
 import argparse
@@ -28,6 +31,7 @@ from app.models import (
     SourceType,
     SubscriberProfile,
     User,
+    UserRole,
 )
 from app.security import contact_hash, encrypt_contact, hash_password
 from collector.content import canonicalize
@@ -123,6 +127,20 @@ def _source_ids(db) -> dict[str, int]:
     return {name: ids[SOURCE_ALIASES.get(name, name)] for name, *_ in DEMO_NEWS}
 
 
+def seed_admin(email: str, password: str) -> None:
+    """Create the administrator, or reset its password if it is already there."""
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(func.lower(User.email) == email))
+        if user is None:
+            user = User(email=email, password_hash=hash_password(password), role=UserRole.admin)
+            user.profile = SubscriberProfile(follows_all=True)
+            db.add(user)
+        else:
+            user.role, user.password_hash = UserRole.admin, hash_password(password)
+        db.commit()
+    print(f"Admin account: {email} / {password}")
+
+
 def seed(email: str, password: str, channel_email: str) -> None:
     init_db()  # checks the schema and adds the collector's sources if the database is new
     with SessionLocal() as db:
@@ -186,6 +204,9 @@ if __name__ == "__main__":
     parser.add_argument("--email", default="demo@ainewsletter.dev")
     parser.add_argument("--password", default="demo1234")
     parser.add_argument("--channel-email", help="address shown on the email channel (default: --email)")
+    parser.add_argument("--admin-email", default="admin@ainewsletter.dev")
+    parser.add_argument("--admin-password", default="admin1234")
     args = parser.parse_args()
     email = args.email.strip().lower()
     seed(email, args.password, (args.channel_email or email).strip().lower())
+    seed_admin(args.admin_email.strip().lower(), args.admin_password)

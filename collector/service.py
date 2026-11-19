@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from models import (CycleRunRepository, CycleType, NewsItem, NewsItemRepository,
                     Source, SourceRepository)
 from .content import canonicalize, feed_items, html_items, json_items
+from .dedup import Deduplicator
 from .http import Client
 
 
@@ -186,7 +187,7 @@ def _fetch_single(source, client, started, stats=None):
 def run_cycle(factory, client=None, source_id=None):
     own_client = client is None
     client = client or Client()
-    added = failures = duplicates = 0
+    added = failures = duplicates = linked_total = 0
     details = []
     results = []
     cycle_started = datetime.now(timezone.utc).replace(microsecond=0)
@@ -209,7 +210,7 @@ def run_cycle(factory, client=None, source_id=None):
             try:
                 for source_id in source_ids:
                     started = cycle_started
-                    count = skipped = 0
+                    count = skipped = linked = 0
                     try:
                         with factory.begin() as db:
                             source = db.get(Source, source_id)
@@ -219,6 +220,7 @@ def run_cycle(factory, client=None, source_id=None):
                             stats = {}
                             items, etag, modified = fetch(source, client, started, stats=stats)
                             repository = NewsItemRepository(db)
+                            dedup = Deduplicator(db)
                             for item in items:
                                 canonical = canonicalize(item.url)
                                 # Exact normalized title + summary/body detects
@@ -233,17 +235,26 @@ def run_cycle(factory, client=None, source_id=None):
                                 if same is not None:
                                     skipped += 1
                                     continue
+                                # Same story from another site (UC-11): stored, but linked to
+                                # the original, which gains one corroborating source.
+                                original = dedup.find_original(item.title, item.published_at, source_id)
                                 inserted = repository.insert_if_new(source_id, item.title, item.url,
-                                    canonical, item.summary, item.body, item.published_at)
+                                    canonical, item.summary, item.body, item.published_at, original)
                                 if inserted is None:
                                     skipped += 1
                                 else:
                                     count += 1
+                                    if original is None:
+                                        dedup.remember(inserted, source_id, item.title, item.published_at)
+                                    else:
+                                        linked += 1
                             SourceRepository(db).record_success(source_id, etag, modified)
                             source.last_success_at = window_end
                         added += count
                         duplicates += skipped
-                        results.append({"source_id": source_id, "name": source.name, "items_added": count, "duplicates": skipped, "ok": True,
+                        linked_total += linked
+                        results.append({"source_id": source_id, "name": source.name, "items_added": count, "duplicates": skipped,
+                                        "linked_to_original": linked, "ok": True,
                                         "window_start": window_start.isoformat(), "window_end": window_end.isoformat(), "diagnostics": stats})
                     except Exception as exc:
                         failures += 1
@@ -258,8 +269,9 @@ def run_cycle(factory, client=None, source_id=None):
             finally:
                 with factory.begin() as db:
                     CycleRunRepository(db).finish(run_id, added, failures,
-                        json.dumps({"duplicates": duplicates, "errors": details}))
-            return {"run_id": run_id, "items_added": added, "duplicates": duplicates, "failures": failures, "sources": results}
+                        json.dumps({"duplicates": duplicates, "linked_to_original": linked_total, "errors": details}))
+            return {"run_id": run_id, "items_added": added, "duplicates": duplicates, "linked_to_original": linked_total,
+                    "failures": failures, "sources": results}
         finally:
             connection.execute(text("SELECT pg_advisory_unlock(4412026)"))
             if own_client:

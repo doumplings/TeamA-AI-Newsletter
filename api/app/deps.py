@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import User, UserSession
+from .models import User, UserRole, UserSession
 from .security import sha256
 
 COOKIE_NAME = "ainews_session"
@@ -28,4 +28,11 @@ def current_user(
     user = db.get(User, row.user_id)
     if not user:
         raise HTTPException(401, "Please log in.")
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    """Authenticator.requireAdmin: only administrators may manage sources (UC-9)."""
+    if user.role != UserRole.admin:
+        raise HTTPException(403, "Only administrators can do this.")
     return user
